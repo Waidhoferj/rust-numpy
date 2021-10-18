@@ -1,6 +1,6 @@
 # Rust NumPy
 
-What if [NumPy]() was written in Rust? Here's a proof of concept implementation.
+What if [NumPy](https://numpy.org/doc/stable/user/whatisnumpy.html) was written in Rust? Here's a proof of concept implementation.
 
 ## Getting Started
 
@@ -29,7 +29,7 @@ Try it out:
 python
 >>> import rnumpy as rnp
 >>> rnp.arange(3)
-Array.Int([0, 1, 2]), shape=[3
+Array.Int([0, 1, 2]), shape=[3]
 ```
 
 ### Tests

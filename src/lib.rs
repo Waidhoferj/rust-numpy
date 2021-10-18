@@ -1,16 +1,16 @@
+use pyo3::basic::CompareOp;
 use pyo3::types::{PyFloat, PyInt, PyList};
-use pyo3::{callback::IntoPyCallbackOutput, PyObjectProtocol};
+use pyo3::{callback::IntoPyCallbackOutput, PyMappingProtocol, PyObjectProtocol};
 use pyo3::{exceptions, prelude::*, PyNumberProtocol};
 use std::collections::VecDeque;
-use std::ops::{Add, Div, Mul, Sub};
+use std::ops::Range;
 
 pub mod rnumpy {
 
-    use pyo3::basic::CompareOp;
-
     use super::*;
 
-    #[derive(Clone, Debug)]
+    #[derive(Clone, Debug, FromPyObject)]
+
     enum NumericalArray {
         Int(Vec<i64>),
         Float(Vec<f64>),
@@ -21,6 +21,20 @@ pub mod rnumpy {
             match &self {
                 &NumericalArray::Float(arr) => arr.len(),
                 &NumericalArray::Int(arr) => arr.len(),
+            }
+        }
+
+        fn get(&self, index: usize) -> Number {
+            match &self {
+                NumericalArray::Float(f) => Number::Float(f[index]),
+                NumericalArray::Int(i) => Number::Int(i[index]),
+            }
+        }
+
+        fn get_range(&self, r: Range<usize>) -> NumericalArray {
+            match &self {
+                NumericalArray::Float(f) => NumericalArray::Float(f[r].to_vec()),
+                NumericalArray::Int(i) => NumericalArray::Int(i[r].to_vec()),
             }
         }
     }
@@ -38,9 +52,23 @@ pub mod rnumpy {
         }
     }
 
-    enum Number {
+    #[derive(FromPyObject, Clone, Copy)]
+    pub enum Number {
         Int(i64),
         Float(f64),
+    }
+
+    impl<T> IntoPyCallbackOutput<T> for Number
+    where
+        f64: IntoPyCallbackOutput<T>,
+        i64: IntoPyCallbackOutput<T>,
+    {
+        fn convert(self, py: Python) -> PyResult<T> {
+            match self {
+                Number::Int(i) => i.convert(py),
+                Number::Float(f) => f.convert(py),
+            }
+        }
     }
 
     impl From<Number> for i64 {
@@ -61,21 +89,6 @@ pub mod rnumpy {
         }
     }
 
-    impl<'s> FromPyObject<'s> for Number {
-        fn extract(ob: &'s PyAny) -> PyResult<Self> {
-            if let Ok(i) = PyInt::try_from(ob) {
-                Ok(Number::Int(i.extract()?))
-            } else if let Ok(f) = PyFloat::try_from(ob) {
-                Ok(Number::Float(f.extract()?))
-            } else {
-                Err(PyErr::new::<exceptions::PyTypeError, _>(format!(
-                    "{:?} cannot be converted into a number.",
-                    &ob
-                )))
-            }
-        }
-    }
-
     #[pyclass]
     pub struct Array {
         #[pyo3(get, set)]
@@ -86,7 +99,7 @@ pub mod rnumpy {
     #[pymethods]
     impl Array {
         #[new]
-        pub fn new(arr: Self) -> Self {
+        pub fn py_new(arr: Self) -> Self {
             arr
         }
 
@@ -169,32 +182,91 @@ pub mod rnumpy {
         }
 
         fn __repr__(&self) -> PyResult<String> {
-            Ok(format!("Array.{:?}, shape={:?}", &self.arr, &self.shape))
+            let arr_str = match &self.arr {
+                NumericalArray::Int(arr) => format!("{:?}", arr),
+                NumericalArray::Float(arr) => format!("{:?}", arr),
+            };
+            Ok(format!("Array({})", arr_str))
         }
 
-        fn __richcmp__(
-            &'p self,
-            other: PyRef<Array>,
-            op: pyo3::basic::CompareOp,
-        ) -> PyResult<bool> {
-            // TODO:
-            match (&self.arr, &other.arr, &op) {
-                (NumericalArray::Int(a1), NumericalArray::Int(a2), CompareOp::Eq) => Ok(a1 == a2),
-                (NumericalArray::Float(a1), NumericalArray::Float(a2), CompareOp::Eq) => {
-                    Ok(a1 == a2)
-                }
-                _ => Err(PyErr::new::<exceptions::PyTypeError, _>(
-                    "Cannot perform this sort of comparison",
-                )),
+        fn __richcmp__(&'p self, other: PyRef<Array>, op: pyo3::basic::CompareOp) -> bool {
+            let arrays_match = match (&self.arr, &other.arr, &op) {
+                (NumericalArray::Int(a1), NumericalArray::Int(a2), CompareOp::Eq) => a1 == a2,
+                (NumericalArray::Float(a1), NumericalArray::Float(a2), CompareOp::Eq) => a1 == a2,
+
+                _ => false,
+            };
+            let shapes_match = self.shape == other.shape;
+            arrays_match && shapes_match
+        }
+    }
+
+    #[derive(FromPyObject)]
+    pub enum ArrayIndexInput {
+        Array(Vec<isize>),
+        Number(isize),
+    }
+    pub enum ArrayIndexOutput {
+        Array(Array),
+        Number(Number),
+    }
+
+    // impl From<isize> for ArrayIndexInput {
+    //     fn from(num: isize) -> Self {
+    //         ArrayIndexInput::Number(num)
+    //     }
+    // }
+
+    impl IntoPy<PyObject> for ArrayIndexOutput {
+        fn into_py(self, py: Python) -> PyObject {
+            match self {
+                ArrayIndexOutput::Array(arr) => arr.convert(py).unwrap(),
+                ArrayIndexOutput::Number(num) => num.convert(py).unwrap(),
             }
         }
+    }
 
-        // fn __bool__(&'p self) -> Self::Result
-        // where
-        //     Self: pyo3::basic::PyObjectBoolProtocol<'p>,
-        // {
-        //     unimplemented!()
-        // }
+    #[pyproto]
+    impl PyMappingProtocol for Array {
+        fn __len__(&self) -> usize {
+            return self.shape[0];
+        }
+        fn __getitem__(&self, idx: ArrayIndexInput) -> PyResult<ArrayIndexOutput> {
+            //TODO: Finish new input logic
+            let indices = match idx {
+                ArrayIndexInput::Number(i) => vec![i],
+                ArrayIndexInput::Array(arr) => arr,
+            };
+            // TODO negative indexing
+            let indices: Vec<usize> = indices
+                .iter()
+                .map(|idx| if *idx > 0 { *idx as usize } else { 0 })
+                .collect();
+            let mut idx = 0;
+            let mut stride = self.shape.iter().fold(1, |stride, dim| stride * dim);
+            let output_is_array = indices.len() < self.shape.len();
+            for (index, dim) in indices.iter().zip(self.shape.iter()) {
+                stride /= dim;
+                idx += index * stride;
+            }
+            if output_is_array {
+                let start = idx;
+                let end = idx
+                    + self.shape[indices.len()..]
+                        .iter()
+                        .fold(1, |stride, dim| stride * dim);
+
+                let subarray = self.arr.get_range(start..end);
+                let shape: Vec<usize> = self.shape[indices.len()..].to_vec();
+                Ok(ArrayIndexOutput::Array(Array {
+                    arr: subarray,
+                    shape,
+                }))
+            } else {
+                let num: Number = self.arr.get(idx);
+                Ok(ArrayIndexOutput::Number(num))
+            }
+        }
     }
 
     #[pyproto]
@@ -208,12 +280,12 @@ pub mod rnumpy {
             }
             let arr: NumericalArray = match (&lhs.arr, &rhs.arr) {
                 (NumericalArray::Int(lhs), NumericalArray::Int(rhs)) => {
-                    let sum: Vec<i64> = lhs.iter().zip(rhs.iter()).map(|(l, r)| l + r).collect();
-                    NumericalArray::Int(sum)
+                    let dif: Vec<i64> = lhs.iter().zip(rhs.iter()).map(|(l, r)| l + r).collect();
+                    NumericalArray::Int(dif)
                 }
                 (NumericalArray::Float(lhs), NumericalArray::Float(rhs)) => {
-                    let sum: Vec<f64> = lhs.iter().zip(rhs.iter()).map(|(l, r)| l + r).collect();
-                    NumericalArray::Float(sum)
+                    let dif: Vec<f64> = lhs.iter().zip(rhs.iter()).map(|(l, r)| l + r).collect();
+                    NumericalArray::Float(dif)
                 }
                 _ => {
                     return Err(PyErr::new::<exceptions::PyTypeError, _>(

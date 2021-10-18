@@ -10,14 +10,40 @@ def test_init_int():
     rnp.Array([1])
 
 
+def test_comparison():
+    # Same arrays should match
+    x = rnp.Array([1, 2, 3, 4])
+    y = rnp.Array([1, 2, 3, 4])
+    assert x == y
+    # But arrays of different types shouldn't
+    z = rnp.Array([1.0, 2.0, 3.0, 4.0])
+    assert not (x == z)
+    # multi dim arrays should match
+    x = x.reshape([2, 2])
+    y = y.reshape([2, 2])
+    assert x == y
+    # but not if they have different shapes
+    y = y.reshape([4])
+    assert not (x == y)
+
+
 def test_multiple_dim():
     x = rnp.Array([[1.0, 2.0], [3.0, 4.0]])
     assert x.shape == [2, 2]
 
 
-def test_index():
-    x = rnp.Array([[10.0]])
+def test_simple_index():
+    x = rnp.Array([10])
+    assert x[0] == 10
+
+
+def test_multi_dim_index():
+    x = rnp.Array([[10]])
+    assert x[[0, 0]] == 10
     assert x[0, 0] == 10
+    x = rnp.arange(10).reshape([2, 5])
+    assert x[0] == rnp.arange(5)
+    assert x[1] == rnp.arange(5, 10)
 
 
 def test_add():
